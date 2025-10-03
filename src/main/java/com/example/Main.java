@@ -2,48 +2,261 @@ package com.example;
 
 import com.example.api.ElpriserAPI;
 import java.time.LocalDate;
-import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 public class Main {
     public static void main(String[] args) {
 
         ElpriserAPI elpriser = new ElpriserAPI();
-        LocalDate idag = LocalDate.now();
-        ElpriserAPI.Prisklass zon = ElpriserAPI.Prisklass.SE1;
+        ElpriserAPI.Prisklass zon = null;
+        LocalDate datum = null;
+        boolean sorted = false;
+        int chargingDuration = 0;
 
-        List<ElpriserAPI.Elpris> priser = elpriser.getPriser(idag, zon);
-
-        ElpriserAPI.Elpris billigast = priser.get(0); // startvärde
-        double total = 0.0;
-
-
-        // Loop för att skriva ut timpriser
-        for (ElpriserAPI.Elpris p : priser) {
-
-            if (p.sekPerKWh() < billigast.sekPerKWh()) {
-                billigast = p;
-            }
-
-
-            total += p.sekPerKWh();
-
-
-            System.out.printf(p.timeStart().toLocalTime() + " - %.2f öre/kWh",
-                    p.sekPerKWh());
-            System.out.print(" || ");
-            System.out.print(p.timeStart().toLocalTime() + " - " + p.eurPerKWh() + " euro/kWh");
-            System.out.println();
+        // Om argument saknas eller --help
+        if (args.length == 0 || (args.length > 0 && args[0].equals("--help"))) {
+            System.out.println("Usage: java com.example.Main [OPTIONS]");
+            System.out.println("  --zone SE1|SE2|SE3|SE4");
+            System.out.println("  --date YYYY-MM-DD");
+            System.out.println("  --sorted");
+            System.out.println("  --charging 2h|4h|8h");
+            System.out.println("  --help");
+            return;
         }
 
+        // Parse argument
+        int index = 0;
+        while (index < args.length) {
+            if (args[index].equals("--zone") && index + 1 < args.length) {
+                index++;
+                if (args[index].equals("SE1")) zon = ElpriserAPI.Prisklass.SE1;
+                else if (args[index].equals("SE2")) zon = ElpriserAPI.Prisklass.SE2;
+                else if (args[index].equals("SE3")) zon = ElpriserAPI.Prisklass.SE3;
+                else if (args[index].equals("SE4")) zon = ElpriserAPI.Prisklass.SE4;
+                else {
+                    System.out.println("Ogiltig zon: " + args[index]);
+                    return;
+                }
+            }
+            else if (args[index].equals("--date") && index + 1 < args.length) {
+                index++;
+                try {
+                    datum = LocalDate.parse(args[index]);
+                } catch (Exception e) {
+                    System.out.println("Ogiltigt datum");
+                    return;
+                }
+            }
+            else if (args[index].equals("--sorted")) {
+                sorted = true;
+            }
+            else if (args[index].equals("--charging") && index + 1 < args.length) {
+                index++;
+                try {
+                    chargingDuration = Integer.parseInt(args[index].replace("h", ""));
+                } catch (Exception e) {
+                    System.out.println("Ogiltig laddningstid (använd t.ex. 2h, 4h, 8h)");
+                    return;
+                }
+            }
+            index++;
+        }
+
+        // Om ingen zon angiven
+        if (zon == null) {
+            System.out.println("Error: --zone is required");
+            return;
+        }
+
+        // Dagens elpriser
+        LocalDate idag = datum != null ? datum : LocalDate.now();
+        List<ElpriserAPI.Elpris> priser = elpriser.getPriser(idag, zon);
+
+        if (priser == null || priser.isEmpty()) {
+            System.out.println("Ingen data tillgänglig");
+            return;
+        }
+
+        // Morgondagens elpriser
+        LocalDate imorgon = idag.plusDays(1);
+        List<ElpriserAPI.Elpris> priserImorgon = elpriser.getPriser(imorgon, zon);
+        if (priserImorgon != null && !priserImorgon.isEmpty()) {
+            priser.addAll(priserImorgon);
+        }
+
+        // Gruppera timpriser
+        priser = groupByHour(priser);
+
+        // Skriv ut priser
+        printPrices(sorted, priser);
+
+        // Hitta och skriv ut: billigast och dyrast timmen samt medelpriset.
+        getLowestHighestAndAverage(priser);
+
+        // Billigaste laddningsfönstret
+        if (chargingDuration > 0) {
+            cheapestChargingWindow(priser, chargingDuration);
+        }
+    }
+
+    private static void getLowestHighestAndAverage(List<ElpriserAPI.Elpris> priser) {
+
+        // Hitta och skriv ut: billigast och dyrast timmen samt medelpriset.
+        ElpriserAPI.Elpris billigasteTimmen = priser.getFirst();
+        ElpriserAPI.Elpris dyrasteTimmen = priser.getFirst();
+        double total = 0.0;
+
+        for (ElpriserAPI.Elpris p : priser) {
+            if (p.sekPerKWh() < billigasteTimmen.sekPerKWh()) {
+                billigasteTimmen = p;
+            }
+            if (p.sekPerKWh() > dyrasteTimmen.sekPerKWh()) {
+                dyrasteTimmen = p;
+            }
+            total += p.sekPerKWh();
+        }
+
+        System.out.printf(Locale.forLanguageTag("sv-SE"),
+                "Lägsta pris: %02d-%02d %.2f öre%n",
+                billigasteTimmen.timeStart().getHour(),
+                billigasteTimmen.timeEnd().getHour(),
+                toÖre(billigasteTimmen.sekPerKWh()));
+
+        System.out.printf(Locale.forLanguageTag("sv-SE"),
+                "Högsta pris: %02d-%02d %.2f öre%n",
+                dyrasteTimmen.timeStart().getHour(),
+                dyrasteTimmen.timeEnd().getHour(),
+                toÖre(dyrasteTimmen.sekPerKWh()));
+
+        double medel = total / priser.size();
+        System.out.printf(Locale.forLanguageTag("sv-SE"),
+                "Medelpris: %.2f öre%n", toÖre(medel));
+
         System.out.println();
-        System.out.printf("Billigaste timmen: %s → %.2f öre/kWh%n",
-                billigast.timeStart().toLocalTime(),
-                billigast.sekPerKWh());
+    }
 
-        double medel = total/ priser.size();
-        System.out.printf("Medelpriset är %.2f öre/kWh%n",
-                medel);
+    private static void printPrices(boolean sorted, List<ElpriserAPI.Elpris> priser) {
+        LocalDate currentDate = null;
+          if (sorted) {
+            List<ElpriserAPI.Elpris> sorterad = new ArrayList<>(priser);
+            sorterad.sort(Comparator.comparingDouble(ElpriserAPI.Elpris::sekPerKWh).reversed());
 
+            for (ElpriserAPI.Elpris p : sorterad) {
+
+                LocalDate prisDate = p.timeStart().toLocalDate();
+                if (currentDate == null || !prisDate.equals(currentDate)) {
+                    System.out.println("\n--- " + prisDate + " ---");
+                    currentDate = prisDate;
+                }
+
+                int startTimme = p.timeStart().getHour();
+                int slutTimme = p.timeEnd().getHour();
+                System.out.printf(Locale.forLanguageTag("sv-SE"),
+                        "%02d-%02d %.2f öre%n", startTimme, slutTimme, toÖre(p.sekPerKWh()));
+            }
+          }
+
+          else {
+            for (ElpriserAPI.Elpris p : priser) {
+
+                LocalDate prisDate = p.timeStart().toLocalDate();
+                if (currentDate == null || !prisDate.equals(currentDate)) {
+                    System.out.println("\n--- " + prisDate + " ---");
+                    currentDate = prisDate;
+                }
+
+                int startTimme = p.timeStart().getHour();
+                int slutTimme = p.timeEnd().getHour();
+                System.out.printf(Locale.forLanguageTag("sv-SE"),
+                        "%02d-%02d %.2f öre%n", startTimme, slutTimme, toÖre(p.sekPerKWh()));
+            }
+        }
+    }
+
+    private static double toÖre(double sek) {
+        return sek * 100;
+    }
+
+    private static void cheapestChargingWindow(List<ElpriserAPI.Elpris> priser, int windowSize) {
+        double billigastePris = Double.MAX_VALUE;
+        List<ElpriserAPI.Elpris> cheapestWindow = new ArrayList<>();
+
+        for (int i = 0; i <= priser.size() - windowSize; i++) {
+            double windowSum = 0;
+            for (int j = 0; j < windowSize; j++) {
+                windowSum += priser.get(i + j).sekPerKWh();
+            }
+
+            if (windowSum < billigastePris) {
+                billigastePris = windowSum;
+                cheapestWindow.clear();
+                for (int j = 0; j < windowSize; j++) {
+                    cheapestWindow.add(priser.get(i + j));
+                }
+            }
+        }
+
+        if (!cheapestWindow.isEmpty()) {
+            System.out.println("Påbörja laddning kl " +
+                    cheapestWindow.get(0).timeStart().toLocalTime());
+
+            double medelPris = billigastePris / windowSize;
+            System.out.printf(Locale.forLanguageTag("sv-SE"),
+                    "Medelpris för fönster: %.2f öre%n", toÖre(medelPris));
+        }
+    }
+
+    private static List<ElpriserAPI.Elpris> groupByHour(List<ElpriserAPI.Elpris> priser) {
+        if (priser.isEmpty()) return priser;
+
+        // Kolla om det är timpriser
+        if (priser.size() <= 30) {
+            return priser;
+        }
+
+        // Om inte timpriser: gruppera kvartalspriser
+        List<ElpriserAPI.Elpris> hourly = new ArrayList<>();
+        List<ElpriserAPI.Elpris> currentHour = new ArrayList<>();
+        int lastHour = -1;
+
+        for (ElpriserAPI.Elpris p : priser) {
+            int hour = p.timeStart().getHour();
+
+            if (hour != lastHour && !currentHour.isEmpty()) {
+                hourly.add(createHourlyAverage(currentHour));
+                currentHour.clear();
+            }
+
+            currentHour.add(p);
+            lastHour = hour;
+        }
+
+        if (!currentHour.isEmpty()) {
+            hourly.add(createHourlyAverage(currentHour));
+        }
+
+        return hourly;
+    }
+
+    private static ElpriserAPI.Elpris createHourlyAverage(List<ElpriserAPI.Elpris> quarters) {
+        double sum = 0;
+        for (ElpriserAPI.Elpris p : quarters) {
+            sum += p.sekPerKWh();
+        }
+        double average = sum / quarters.size();
+
+        ElpriserAPI.Elpris first = quarters.get(0);
+        ElpriserAPI.Elpris last = quarters.get(quarters.size() - 1);
+
+        return new ElpriserAPI.Elpris(
+                average,
+                first.eurPerKWh(),
+                first.exr(),
+                first.timeStart(),
+                last.timeEnd()
+        );
     }
 }
