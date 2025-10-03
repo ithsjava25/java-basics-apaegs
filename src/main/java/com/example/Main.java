@@ -1,7 +1,11 @@
 package com.example;
 
 import com.example.api.ElpriserAPI;
+
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -105,8 +109,8 @@ public class Main {
     private static void getLowestHighestAndAverage(List<ElpriserAPI.Elpris> priser) {
 
         // Hitta och skriv ut: billigast och dyrast timmen samt medelpriset.
-        ElpriserAPI.Elpris billigasteTimmen = priser.getFirst();
-        ElpriserAPI.Elpris dyrasteTimmen = priser.getFirst();
+        ElpriserAPI.Elpris billigasteTimmen = priser.get(0);
+        ElpriserAPI.Elpris dyrasteTimmen = priser.get(0);
         double total = 0.0;
 
         for (ElpriserAPI.Elpris p : priser) {
@@ -158,7 +162,6 @@ public class Main {
                         "%02d-%02d %.2f öre%n", startTimme, slutTimme, toÖre(p.sekPerKWh()));
             }
           }
-
           else {
             for (ElpriserAPI.Elpris p : priser) {
 
@@ -212,26 +215,25 @@ public class Main {
     private static List<ElpriserAPI.Elpris> groupByHour(List<ElpriserAPI.Elpris> priser) {
         if (priser.isEmpty()) return priser;
 
-        // Kolla om det är timpriser
-        if (priser.size() <= 30) {
+        Duration d = Duration.between(priser.get(0).timeStart(), priser.get(0).timeEnd());
+        if (d.toHours() >= 1) {
             return priser;
         }
 
-        // Om inte timpriser: gruppera kvartalspriser
         List<ElpriserAPI.Elpris> hourly = new ArrayList<>();
         List<ElpriserAPI.Elpris> currentHour = new ArrayList<>();
-        int lastHour = -1;
+        LocalDateTime lastHour = null;
 
         for (ElpriserAPI.Elpris p : priser) {
-            int hour = p.timeStart().getHour();
+            LocalDateTime hourKey = p.timeStart().truncatedTo(ChronoUnit.HOURS).toLocalDateTime();
 
-            if (hour != lastHour && !currentHour.isEmpty()) {
+            if (lastHour != null && !hourKey.equals(lastHour)) {
                 hourly.add(createHourlyAverage(currentHour));
                 currentHour.clear();
             }
 
             currentHour.add(p);
-            lastHour = hour;
+            lastHour = hourKey;
         }
 
         if (!currentHour.isEmpty()) {
