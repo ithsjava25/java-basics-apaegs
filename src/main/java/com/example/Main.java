@@ -31,6 +31,7 @@ public class Main {
             return;
         }
 
+
         // Parse argument
         int index = 0;
         while (index < args.length) {
@@ -105,6 +106,7 @@ public class Main {
             cheapestChargingWindow(priser, chargingDuration);
         }
     }
+
 
     private static void getLowestHighestAndAverage(List<ElpriserAPI.Elpris> priser) {
 
